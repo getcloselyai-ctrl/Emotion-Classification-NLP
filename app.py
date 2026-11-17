@@ -1,356 +1,221 @@
 
-import os
-import re
-import nltk
-import joblib
 import streamlit as st
-
+import joblib
+import re
+import string
+import nltk
 from nltk.corpus import stopwords
 
-
-# ============================================================
-# 1. PAGE CONFIGURATION
-# ============================================================
-
+# ---------------- PAGE CONFIG ----------------
 st.set_page_config(
-    page_title="Emotion Classifier",
-    page_icon="😊",
-    layout="centered",
-    initial_sidebar_state="collapsed"
+    page_title="EmotiSense",
+    page_icon="🟠",
+    layout="centered"
 )
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-# ============================================================
-# 2. LOAD NLTK STOPWORDS
-# ============================================================
-
-@st.cache_resource
-def get_stopwords():
+# ---------------- CUSTOM THEME ----------------
+st.markdown(
     """
-    Download and load English stopwords.
-    The same stopword-removal approach must be used during training.
-    """
-
-    nltk_data_path = os.path.join(
-        os.path.dirname(BASE_DIR),
-        "nltk_data"
-    )
-
-    os.makedirs(nltk_data_path, exist_ok=True)
-
-    if nltk_data_path not in nltk.data.path:
-        nltk.data.path.append(nltk_data_path)
-
-    try:
-        return set(stopwords.words("english"))
-
-    except LookupError:
-        downloaded = nltk.download(
-            "stopwords",
-            download_dir=nltk_data_path,
-            quiet=True
-        )
-
-        if not downloaded:
-            raise RuntimeError(
-                "Unable to download NLTK stopwords."
-            )
-
-        return set(stopwords.words("english"))
-
-
-# ============================================================
-# 3. LOAD MODEL, VECTORIZER AND LABEL MAPPING
-# ============================================================
-
-@st.cache_resource
-def load_artifacts():
-
-    files = {
-        "model": os.path.join(BASE_DIR, "emotion_model.pkl"),
-        "vectorizer": os.path.join(BASE_DIR, "tfidf_vectorizer.pkl"),
-        "mapping": os.path.join(BASE_DIR, "emotion_mapping.pkl")
+    <style>
+    /* Main background */
+    .stApp {
+        background: #080808;
+        color: #ffffff;
     }
 
-    for name, path in files.items():
-        if not os.path.isfile(path):
-            raise FileNotFoundError(
-                f"Missing {name} file: {path}"
-            )
+    /* Content width and spacing */
+    .block-container {
+        max-width: 750px;
+        padding-top: 4rem;
+        padding-bottom: 3rem;
+    }
 
-    model = joblib.load(files["model"])
-    vectorizer = joblib.load(files["vectorizer"])
-    emotion_mapping = joblib.load(files["mapping"])
+    /* Main title */
+    h1 {
+        color: #ff8c00 !important;
+        text-align: center;
+        font-size: 44px !important;
+        font-weight: 800 !important;
+    }
+
+    /* Headings and text */
+    h2, h3, p, label {
+        color: #ffffff !important;
+    }
+
+    /* Input area */
+    [data-testid="stTextArea"] textarea {
+        background-color: #ffffff !important;
+        color: #111111 !important;
+        border: 2px solid #ff8c00 !important;
+        border-radius: 12px !important;
+        font-size: 14px !important;
+    }
+
+    [data-testid="stTextArea"] textarea::placeholder {
+        color: #777777 !important;
+        font-size: 12px !important;
+    }
+
+    /* Analyze button */
+    .stButton button {
+        background-color: #ff8c00 !important;
+        color: #000000 !important;
+        border: none !important;
+        border-radius: 10px !important;
+        font-weight: 700 !important;
+        padding: 0.65rem !important;
+    }
+
+    .stButton button:hover {
+        background-color: #ffa726 !important;
+        color: #000000 !important;
+        border: none !important;
+    }
+
+    /* Divider */
+    hr {
+        border-color: #ff8c00 !important;
+    }
+
+    /* Success and warning messages */
+    [data-testid="stAlert"] {
+        border-radius: 10px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# ---------------- LOAD MODEL ----------------
+@st.cache_resource
+def load_artifacts():
+    model = joblib.load("models/emotion_model.pkl")
+    vectorizer = joblib.load("models/tfidf_vectorizer.pkl")
+    emotion_mapping = joblib.load("models/emotion_mapping.pkl")
 
     return model, vectorizer, emotion_mapping
 
 
-try:
-    STOP_WORDS = get_stopwords()
-    model, vectorizer, emotion_mapping = load_artifacts()
-
-except Exception as error:
-    st.error("The application could not initialize.")
-    st.exception(error)
-    st.stop()
+model, vectorizer, emotion_mapping = load_artifacts()
 
 
-# ============================================================
-# 4. TEXT PREPROCESSING
-# ============================================================
+# ---------------- LOAD STOPWORDS ----------------
+@st.cache_resource
+def load_stopwords():
+    try:
+        return set(stopwords.words("english"))
+    except LookupError:
+        nltk.download("stopwords", quiet=True)
+        return set(stopwords.words("english"))
 
-def clean_text(text: str) -> str:
-    """
-    Preprocessing must match the notebook's training pipeline:
-    - Convert to lowercase
-    - Remove non-ASCII characters, punctuation and digits
-    - Remove English stopwords
-    - Remove extra whitespace
-    """
 
-    if not isinstance(text, str):
-        return ""
+stop_words = load_stopwords()
 
+
+# ---------------- TEXT PREPROCESSING ----------------
+def preprocess_text(text):
     text = text.lower()
 
-    # Remove punctuation, numbers, emojis and non-ASCII characters
-    text = re.sub(r"[^a-z\s]", " ", text)
+    # Remove punctuation
+    text = text.translate(
+        str.maketrans("", "", string.punctuation)
+    )
 
-    # Normalize whitespace
-    text = re.sub(r"\s+", " ", text).strip()
+    # Remove numbers
+    text = re.sub(r"\d+", "", text)
+
+    # Remove non-ASCII characters
+    text = text.encode("ascii", "ignore").decode("ascii")
 
     # Remove stopwords
+    words = text.split()
     words = [
-        word for word in text.split()
-        if word not in STOP_WORDS
+        word for word in words
+        if word not in stop_words
     ]
 
     return " ".join(words)
 
 
-# ============================================================
-# 5. CONVERT MODEL OUTPUT INTO EMOTION LABEL
-# ============================================================
+# ---------------- EMOTION MAPPING ----------------
+id_to_emotion = {
+    int(value): str(key)
+    for key, value in emotion_mapping.items()
+}
 
-def get_emotion_label(prediction):
-    """
-    Supports both mapping formats:
-
-    {'sadness': 0, 'anger': 1, ...}
-
-    {0: 'sadness', 1: 'anger', ...}
-    """
-
-    if hasattr(prediction, "item"):
-        prediction = prediction.item()
-
-    # Mapping: emotion -> integer
-    for label, number in emotion_mapping.items():
-        if str(number) == str(prediction):
-            return str(label).capitalize()
-
-    # Mapping: integer -> emotion
-    for number, label in emotion_mapping.items():
-        if str(number) == str(prediction):
-            return str(label).capitalize()
-
-    # Prediction may already be a label
-    return str(prediction).capitalize()
-
-
-# ============================================================
-# 6. EMOTION DISPLAY CONFIGURATION
-# ============================================================
-
-EMOTION_EMOJIS = {
-    "Happiness": "😊",
-    "Sadness": "😢",
-    "Anger": "😡",
-    "Fear": "😨",
-    "Love": "❤️",
-    "Surprise": "😲"
+emotion_emoji = {
+    "joy": "😊",
+    "happiness": "😊",
+    "sadness": "😢",
+    "anger": "😠",
+    "love": "❤️",
+    "fear": "😨",
+    "surprise": "😲",
+    "neutral": "😐"
 }
 
 
-EMOTION_DESCRIPTIONS = {
-    "Happiness": "The text expresses positive feelings or joy.",
-    "Sadness": "The text expresses sadness or disappointment.",
-    "Anger": "The text expresses frustration or anger.",
-    "Fear": "The text expresses worry, anxiety or fear.",
-    "Love": "The text expresses affection or love.",
-    "Surprise": "The text expresses unexpected feelings or surprise."
-}
-
-
-# ============================================================
-# 7. PREDICTION FUNCTION
-# ============================================================
-
-def predict_emotion(text: str):
-
-    cleaned_text = clean_text(text)
-
-    if not cleaned_text:
-        raise ValueError(
-            "No usable words remain after preprocessing. "
-            "Please enter a longer or different sentence."
-        )
-
-    # Convert input into TF-IDF features
-    transformed_text = vectorizer.transform([cleaned_text])
-
-    # Predict emotion
-    prediction = model.predict(transformed_text)[0]
-
-    emotion = get_emotion_label(prediction)
-
-    # Get probability for the predicted class, if supported
-    confidence = None
-
-    if hasattr(model, "predict_proba"):
-
-        probabilities = model.predict_proba(
-            transformed_text
-        )[0]
-
-        classes = list(model.classes_)
-
-        predicted_index = next(
-            (
-                index for index, class_label in enumerate(classes)
-                if str(class_label) == str(prediction)
-            ),
-            None
-        )
-
-        if predicted_index is not None:
-            confidence = float(
-                probabilities[predicted_index]
-            ) * 100
-
-    return emotion, confidence, cleaned_text
-
-
-# ============================================================
-# 8. APPLICATION DESIGN
-# ============================================================
-
-st.title("😊 Emotion Classification")
+# ---------------- APPLICATION UI ----------------
+st.title("EmotiSense")
 
 st.markdown(
-    """
-    Discover the emotion behind your words using
-    **Natural Language Processing and Machine Learning**.
-
-    Enter a sentence and let the model identify the emotion.
-    """
+    "<p style='text-align:center; color:#cccccc;'>"
+    "Understand the emotion behind your words."
+    "</p>",
+    unsafe_allow_html=True
 )
 
-st.divider()
+st.write("")
 
-st.subheader("Analyze your text")
-
-user_input = st.text_area(
+sentence = st.text_area(
     "Enter your sentence",
     placeholder="Example: I feel so happy and excited today!",
-    height=130,
-    max_chars=5000
+    height=110,
+    max_chars=1000
 )
 
-st.caption(
-    "Supported emotions: Happiness, Sadness, Anger, Fear, Love and Surprise."
-)
+st.write("")
 
-predict_button = st.button(
-    "✨ Predict Emotion",
-    type="primary",
-    use_container_width=True
-)
+if st.button("ANALYZE EMOTION", use_container_width=True):
 
-
-# ============================================================
-# 9. DISPLAY PREDICTION
-# ============================================================
-
-if predict_button:
-
-    if not user_input.strip():
-
-        st.warning("Please enter some text before predicting.")
+    if not sentence.strip():
+        st.warning("Please enter a sentence first.")
 
     else:
+        cleaned_text = preprocess_text(sentence)
 
-        with st.spinner("Analyzing your text..."):
+        if not cleaned_text:
+            st.warning("Please enter a meaningful sentence.")
 
-            try:
+        else:
+            vector = vectorizer.transform([cleaned_text])
 
-                emotion, confidence, cleaned_text = predict_emotion(
-                    user_input
+            if vector.nnz == 0:
+                st.warning(
+                    "Unable to recognize these words. "
+                    "Please try another sentence."
                 )
 
-                emoji = EMOTION_EMOJIS.get(emotion, "💬")
+            else:
+                prediction = model.predict(vector)[0]
 
-                description = EMOTION_DESCRIPTIONS.get(
-                    emotion,
-                    "The model has identified an emotion in your text."
+                emotion = id_to_emotion.get(
+                    int(prediction),
+                    str(prediction)
+                )
+
+                emoji = emotion_emoji.get(
+                    emotion.lower(),
+                    "✨"
                 )
 
                 st.divider()
-
-                st.subheader("Prediction Result")
+                st.subheader("DETECTED EMOTION")
 
                 st.markdown(
-                    f"<div style='text-align:center; padding:25px; "
-                    f"border:1px solid rgba(128,128,128,0.3); "
-                    f"border-radius:15px;'>"
-                    f"<div style='font-size:65px;'>{emoji}</div>"
-                    f"<h1>{emotion}</h1>"
-                    f"<p>{description}</p>"
-                    f"</div>",
+                    f"<h1 style='color:#ff8c00; text-align:center;'>"
+                    f"{emoji} {emotion.title()}"
+                    f"</h1>",
                     unsafe_allow_html=True
                 )
-
-                if confidence is not None:
-
-                    st.subheader("Model Confidence")
-
-                    st.progress(
-                        min(max(confidence / 100, 0.0), 1.0)
-                    )
-
-                    st.write(
-                        f"**{confidence:.2f}%**"
-                    )
-
-                    st.caption(
-                        "This is the model's predicted probability, "
-                        "not a guarantee of correctness."
-                    )
-
-                with st.expander("View processed text"):
-                    st.write(cleaned_text)
-
-            except Exception as error:
-
-                st.error("Prediction failed.")
-                st.exception(error)
-
-
-# ============================================================
-# 10. FOOTER
-# ============================================================
-
-st.divider()
-
-st.markdown(
-    """
-    <div style="text-align:center; opacity:0.7;">
-        Built with Python · NLP · TF-IDF · Scikit-learn · Streamlit
-        <br><br>
-        Emotion Classification Project
-    </div>
-    """,
-    unsafe_allow_html=True
-)
